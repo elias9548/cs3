@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>Mobile FPS — улучшенная демо-версия</title>
+<style>
+  :root{--ui-bg:rgba(0,0,0,0.45);--accent:#2a74ff;--danger:#ff4444}
+  html,body{height:100%;margin:0;background:#0b0b0b;overflow:hidden;-webkit-user-select:none;-ms-user-select:none;user-select:none}
+  canvas{display:block}
+  #uiTop{position:fixed;left:8px;top:8px;color:#fff;font-family:Arial,Helvetica,sans-serif;z-index:50;background:var(--ui-bg);padding:8px;border-radius:8px}
+  #uiRight{position:fixed;right:8px;top:8px;color:#fff;font-family:Arial,Helvetica,sans-serif;z-index:50;background:var(--ui-bg);padding:8px;border-radius:8px;text-align:right}
+  #cross{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:18px;height:18px;pointer-events:none;z-index:45}
+  #cross:before,#cross:after{content:"";position:absolute;background:#fff;border-radius:1px}
+  #cross:before{left:8px;top:0;width:2px;height:18px}
+  #cross:after{top:8px;left:0;width:18px;height:2px}
+  #msg{position:fixed;left:50%;top:18%;transform:translateX(-50%);color:#fff;font-family:Arial,Helvetica,sans-serif;font-size:20px;background:var(--ui-bg);padding:10px;border-radius:8px;z-index:60;display:none}
+  #startScreen{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,rgba(0,0,0,0.6),rgba(0,0,0,0.85));z-index:80}
+  .startBox{background:#111;padding:18px;border-radius:10px;color:#fff;font-family:Arial,Helvetica,sans-serif;text-align:center;max-width:92vw}
+  button{appearance:none;border:0;padding:10px 16px;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+  /* mobile controls */
+  #controlsMobile{position:fixed;left:0;right:0;bottom:0;height:36vh;pointer-events:none;z-index:70;display:flex;justify-content:space-between;align-items:flex-end;padding:0 4vw 4vw}
+  .pad{width:44vw;height:36vh;pointer-events:auto;position:relative;touch-action:none}
+  .base{position:absolute;left:6vw;bottom:6vh;width:28vw;height:28vw;border-radius:50%;background:rgba(255,255,255,0.06);display:flex;align-items:center;justify-content:center}
+  .stick{width:12vw;height:12vw;border-radius:50%;background:rgba(255,255,255,0.12);transform:translate(0,0)}
+  .fire{position:absolute;right:6vw;bottom:14vh;width:18vw;height:18vw;border-radius:50%;background:rgba(255,0,0,0.14);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:bold;font-family:Arial,Helvetica,sans-serif;font-size:1rem;pointer-events:auto}
+  .reload{position:absolute;right:6vw;bottom:36vh;padding:8px 12px;border-radius:8px;background:rgba(0,0,0,0.5);color:#fff;pointer-events:auto}
+  #log{position:fixed;left:8px;bottom:8px;color:#ccc;font-family:monospace;font-size:12px;z-index:40;background:rgba(0,0,0,0.35);padding:6px;border-radius:6px;max-width:45vw;max-height:20vh;overflow:auto}
+  #settings{position:fixed;left:8px;top:120px;z-index:55;background:var(--ui-bg);padding:8px;border-radius:8px;color:#fff;font-family:Arial,Helvetica,sans-serif}
+  @media(min-width:900px){ #controlsMobile{display:none} }
+</style>
+</head>
+<body>
+<div id="uiTop">
+  Здоровье: <span id="hp">100</span><br/>
+  Патроны: <span id="ammo">30</span>
+</div>
+<div id="uiRight">
+  Убийств: <span id="kills">0</span><br/>
+  FPS: <span id="fps">0</span>
+</div>
+<div id="cross"></div>
+<div id="msg"></div>
+
+<div id="startScreen">
+  <div class="startBox">
+    <div style="font-size:20px;margin-bottom:8px">Mobile FPS — улучшенная версия</div>
+    <div style="margin-bottom:10px">Левый джойстик — движение, свайп справа — прицел, кнопка — стрелять. Для игры с телефона открой файл по HTTP (не через file://).</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button id="startBtn">НАЧАТЬ</button>
+      <button id="debugBtn">Показывать логи</button>
+    </div>
+  </div>
+</div>
+
+<div id="controlsMobile" aria-hidden="false">
+  <div class="pad">
+    <div class="base" id="leftBase"><div class="stick" id="leftStick"></div></div>
+  </div>
+  <div class="pad">
+    <div class="fire" id="fireBtn">СТРЕЛЯТЬ</div>
+    <div class="reload" id="reloadBtn">ПЕРЕЗАРЯДКА</div>
+  </div>
+</div>
+
+<div id="log" style="display:none"></div>
+<div id="settings" style="display:none">
+  Сложность: <input id="diff" type="range" min="0" max="3" value="1" step="1"/><br/>
+  Кнопка N — новый раунд
+</div>
+
+<script type="module">
+// === Импорт Three.js ===
+import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+import { PointerLockControls } from 'https://unpkg.com/three@0.152.2/examples/jsm/controls/PointerLockControls.js';
+
+// === UI ===
+const hpEl = document.getElementById('hp'), ammoEl = document.getElementById('ammo'), killsEl = document.getElementById('kills');
+const fpsEl = document.getElementById('fps');
+const msgEl = document.getElementById('msg');
+const logEl = document.getElementById('log');
+const startScreen = document.getElementById('startScreen');
+const startBtn = document.getElementById('startBtn');
+const debugBtn = document.getElementById('debugBtn');
+const fireBtn = document.getElementById('fireBtn');
+const reloadBtn = document.getElementById('reloadBtn');
+const leftBase = document.getElementById('leftBase'), leftStick = document.getElementById('leftStick');
+const diffSlider = document.getElementById('diff');
+const settingsEl = document.getElementById('settings');
+
+let showLogs = false;
+function log(...a){ if(showLogs){ logEl.style.display='block'; logEl.innerText = (logEl.innerText?logEl.innerText+'\n':'') + a.join(' '); logEl.scrollTop = logEl.scrollHeight; } }
+debugBtn.onclick = ()=>{ showLogs = !showLogs; logEl.style.display = showLogs ? 'block' : 'none'; settingsEl.style.display = showLogs? 'block' :'none'; };
+
+// === Основные переменные сцены ===
+let scene, camera, renderer, controls;
+let clock = new THREE.Clock();
+let move = { x:0, z:0 }; // x - right, z - forward
+let objects = [], enemies = [];
+let bullets = []; // пул снарядов игрока
+let enemyBullets = []; // пул снарядов врагов
+let raycaster = new THREE.Raycaster();
+let hp = 100, ammo = 30, kills = 0;
+let canShoot = true;
+const MAX_BULLETS = 40;
+const MAX_ENEMY_BULLETS = 40;
+const RELOAD_MS = 1000;
+const MOBILE = /Mobi|Android/i.test(navigator.userAgent);
+
+// === Инициалиация сцены и рендерера ===
+function init(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb);
+  camera = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.1, 500);
+  renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  controls = new PointerLockControls(camera, renderer.domElement);
+  // свет
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.9); hemi.position.set(0,50,0); scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6); dir.position.set(-30,50,-30); dir.castShadow=true; scene.add(dir);
+
+  // пол
+  const floorGeo = new THREE.PlaneGeometry(200,200,8,8);
+  const floorMat = new THREE.MeshStandardMaterial({ color:0x6b6b6b });
+  const floor = new THREE.Mesh(floorGeo, floorMat); floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+
+  // стены
+  const wallMat = new THREE.MeshStandardMaterial({ color:0x8a8a8a });
+  const walls = [
+    new THREE.Mesh(new THREE.BoxGeometry(200,20,2), wallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(200,20,2), wallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(2,20,200), wallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(2,20,200), wallMat)
+  ];
+  walls[0].position.set(0,10,-100); walls[1].position.set(0,10,100); walls[2].position.set(-100,10,0); walls[3].position.set(100,10,0);
+  walls.forEach(w=>{ w.receiveShadow=true; scene.add(w); objects.push(w); });
+
+  // коробки-укрытия
+  const boxGeo = new THREE.BoxGeometry(6,6,6); const boxMat = new THREE.MeshStandardMaterial({ color:0x553311 });
+  for(let i=0;i<14;i++){
+    const b = new THREE.Mesh(boxGeo, boxMat);
+    b.position.set((Math.random()-0.5)*150,3,(Math.random()-0.5)*150);
+    b.castShadow=true; b.receiveShadow=true; scene.add(b); objects.push(b);
+  }
+
+  // камера/игрок
+  controls.getObject().position.set(0,2,0);
+  scene.add(controls.getObject());
+
+  // простое оружие (визуально)
+  const gun = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.18,0.9), new THREE.MeshStandardMaterial({ color:0x222222 }));
+  gun.position.set(0.25,-0.22,-0.8); camera.add(gun);
+
+  // пул пуль игрока
+  const bGeo = new THREE.SphereGeometry(0.06,6,6);
+  const bMat = new THREE.MeshBasicMaterial({ color:0xffffaa });
+  for(let i=0;i<MAX_BULLETS;i++){
+    const m = new THREE.Mesh(bGeo,bMat); m.visible=false; scene.add(m); bullets.push({mesh:m, vel:new THREE.Vector3(), alive:false});
+  }
+  // пул пуль врагов
+  const eGeo = new THREE.SphereGeometry(0.07,6,6);
+  const eMat = new THREE.MeshBasicMaterial({ color:0xffcc88 });
+  for(let i=0;i<MAX_ENEMY_BULLETS;i++){
+    const m = new THREE.Mesh(eGeo,eMat); m.visible=false; scene.add(m); enemyBullets.push({mesh:m, vel:new THREE.Vector3(), alive:false});
+  }
+
+  // враги
+  for(let i=0;i<6;i++) spawnEnemy();
+
+  // события
+  window.addEventListener('resize', onResize);
+  renderer.domElement.addEventListener('click', ()=>{ if(!MOBILE) controls.lock(); });
+
+  // управление клавишами (на десктопе)
+  window.addEventListener('keydown', (e)=>{ if(e.code==='KeyR') reload(); if(e.code==='KeyN') restart(); if(e.code==='Space') shoot(); });
+
+  // мобильные сенсоры
+  setupMobileControls();
+}
+
+// === Вспомогательные функции пула пуль ===
+function fireBullet(origin, dir, speed=120){
+  for(const b of bullets){
+    if(!b.alive){ b.alive=true; b.mesh.visible=true; b.mesh.position.copy(origin); b.vel.copy(dir).multiplyScalar(speed); return; }
+  }
+}
+function fireEnemyBullet(origin, dir, speed=90){
+  for(const b of enemyBullets){
+    if(!b.alive){ b.alive=true; b.mesh.visible=true; b.mesh.position.copy(origin); b.vel.copy(dir).multiplyScalar(speed); return; }
+  }
+}
+
+// === Создание врага ===
+function spawnEnemy(){
+  const geo = new THREE.BoxGeometry(1.2,1.8,1.2);
+  const mat = new THREE.MeshStandardMaterial({ color:0xff5555 });
+  const m = new THREE.Mesh(geo, mat);
+  m.position.set((Math.random()-0.5)*140,0.9,(Math.random()-0.5)*140);
+  m.userData = { hp:60, speed: 0.7 + Math.random()*0.9, alive:true, shootCooldown: 0.5 + Math.random()*2 };
+  scene.add(m); enemies.push(m);
+}
+
+// === Обновление врагов (движение и стрельба) ===
+function updateEnemies(dt){
+  const playerPos = controls.getObject().position;
+  const difficulty = Number(diffSlider.value || 1);
+  enemies.forEach(e=>{
+    if(!e.userData.alive) return;
+    const toPlayer = new THREE.Vector3().subVectors(playerPos, e.position);
+    const dist = toPlayer.length();
+    // поведение
+    if(dist < 50 + difficulty*20){
+      // преследование
+      toPlayer.normalize();
+      e.position.addScaledVector(toPlayer, e.userData.speed * (1 + difficulty*0.2) * dt);
+      // стрельба
+      e.userData.shootCooldown -= dt;
+      if(e.userData.shootCooldown <= 0){
+        e.userData.shootCooldown = 0.6 + Math.random()*1.4 - difficulty*0.15;
+        // проверим преграды (raycast к игроку)
+        const origin = e.position.clone().add(new THREE.Vector3(0,0.9,0));
+        const dir = new THREE.Vector3().subVectors(playerPos.clone().add(new THREE.Vector3(0,1.0,0)), origin).normalize();
+        // raycast на объекты: если нет блокировки -> стрелять
+        raycaster.set(origin, dir);
+        const blocks = raycaster.intersectObjects(objects, true);
+        const distToBlock = blocks.length ? blocks[0].distance : Infinity;
+        const distToPlayer = origin.distanceTo(playerPos);
+        if(distToPlayer < distToBlock - 0.6){
+          fireEnemyBullet(origin, dir, 80 + difficulty*10);
+        }
+      }
+    } else {
+      // патруль
+      if(!e.userData.target) e.userData.target = new THREE.Vector3((Math.random()-0.5)*80,0,(Math.random()-0.5)*80);
+      const dir = new THREE.Vector3().subVectors(e.userData.target, e.position);
+      if(dir.length() < 1) e.userData.target.set((Math.random()-0.5)*80,0,(Math.random()-0.5)*80);
+      dir.normalize();
+      e.position.addScaledVector(dir, e.userData.speed * 0.5 * dt);
+    }
+    // простая коллизия: не проваливаться в коробки
+    objects.forEach(o=>{
+      const d = o.position.distanceTo(e.position);
+      if(d < 3.6){
+        const push = new THREE.Vector3().subVectors(e.position, o.position).normalize().multiplyScalar(0.04);
+        e.position.add(push);
+      }
+    });
+  });
+}
+
+// === Обновление пуль ===
+function updateBullets(dt){
+  // игрок
+  const originPlayer = controls.getObject().position;
+  bullets.forEach(b=>{
+    if(!b.alive) return;
+    b.mesh.position.addScaledVector(b.vel, dt);
+    // lifetime/out of bounds
+    if(b.mesh.position.length() > 400){ b.alive=false; b.mesh.visible=false; return; }
+    // столкновение с врагами
+    for(const e of enemies){
+      if(!e.userData.alive) continue;
+      if(b.mesh.position.distanceTo(e.position) < 1.0){
+        e.userData.hp -= 28;
+        b.alive=false; b.mesh.visible=false;
+        // эффект (простая вспышка)
+        spawnHit(b.mesh.position);
+        if(e.userData.hp <= 0){
+          e.userData.alive=false;
+          kills++; killsEl.textContent = kills;
+          scene.remove(e);
+          setTimeout(()=>{ // респавн
+            const idx = enemies.indexOf(e); if(idx!==-1) enemies.splice(idx,1);
+            spawnEnemy();
+          },1500);
+        }
+        break;
+      }
+    }
+    // столкновение с окружением
+    for(const o of objects){
+      if(b.mesh.position.distanceTo(o.position) < 3.0){
+        b.alive=false; b.mesh.visible=false;
+        spawnHit(b.mesh.position);
+        break;
+      }
+    }
+  });
+
+  // вражеские пули поражают игрока
+  enemyBullets.forEach(b=>{
+    if(!b.alive) return;
+    b.mesh.position.addScaledVector(b.vel, dt);
+    if(b.mesh.position.length() > 400){ b.alive=false; b.mesh.visible=false; return; }
+    // попадание игрока: расстояние до камеры
+    const playerPos = controls.getObject().position.clone().add(new THREE.Vector3(0,1.0,0));
+    if(b.mesh.position.distanceTo(playerPos) < 0.8){
+      // урон
+      hp = Math.max(0, hp - (6 + Math.floor(Math.random()*6)));
+      hpEl.textContent = hp;
+      b.alive=false; b.mesh.visible=false;
+      spawnHit(b.mesh.position);
+      if(hp <= 0) onPlayerDead();
+    }
+    // столкновения с окружением
+    for(const o of objects){
+      if(b.mesh.position.distanceTo(o.position) < 3.0){
+        b.alive=false; b.mesh.visible=false; break;
+      }
+    }
+  });
+}
+
+// === Эффекты попадания ===
+function spawnHit(pos){
+  // простая точка света (сфера) на короткое время
+  const s = new THREE.Mesh(new THREE.SphereGeometry(0.18,8,8), new THREE.MeshBasicMaterial({ color:0xffff66 }));
+  s.position.copy(pos); scene.add(s);
+  setTimeout(()=>scene.remove(s),220);
+}
+
+// === Игрок: стрельба / перезарядка ===
+function shoot(){
+  if(!canShoot) return;
+  if(ammo <= 0){
+    flash('Нет патронов — перезарядка');
+    canShoot = false;
+    setTimeout(()=>{ ammo = 30; ammoEl.textContent = ammo; canShoot = true; }, RELOAD_MS);
+    return;
+  }
+  ammo--; ammoEl.textContent = ammo;
+  // направление из камеры
+  const origin = new THREE.Vector3(); origin.setFromMatrixPosition(camera.matrixWorld);
+  const dir = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion).normalize();
+  fireBullet(origin.clone().add(dir.clone().multiplyScalar(0.6)), dir, 140);
+  // трассера: рисуем линию (временная)
+  drawTracer(origin, dir);
+}
+function reload(){ if(!canShoot) return; canShoot = false; flash('Перезарядка...'); setTimeout(()=>{ ammo = 30; ammoEl.textContent = ammo; canShoot = true; }, RELOAD_MS) }
+
+// === Трассера (линия) ===
+function drawTracer(origin, dir){
+  const len = 60;
+  const points = [ origin.clone(), origin.clone().add(dir.clone().multiplyScalar(len)) ];
+  const geom = new THREE.BufferGeometry().setFromPoints(points);
+  const line = new THREE.Line(geom, new THREE.LineBasicMaterial({ color:0xffffff }));
+  scene.add(line);
+  setTimeout(()=>scene.remove(line), 100);
+}
+
+// === Игрок умер ===
+function onPlayerDead(){
+  flash('Вы убиты. Нажмите R для возрождения');
+  move.x = 0; move.z = 0;
+  // временно телепорт
+  window.addEventListener('keydown', function rez(e){ if(e.code==='KeyR'){ hp=100; hpEl.textContent=hp; controls.getObject().position.set(0,2,0); window.removeEventListener('keydown', rez); }});
+}
+
+// === UI вспомогалки ===
+function flash(text, ms=1000){
+  msgEl.style.display='block'; msgEl.textContent = text;
+  setTimeout(()=>{ msgEl.style.display='none'; }, ms);
+}
+
+// === Мобильное управление: джойстик и свайп правой стороны ===
+let leftTouchId = null, leftCenter = {x:0,y:0}, leftMax = 1;
+let rightTouchId = null, lastTouchX=0, lastTouchY=0;
+function setupMobileControls(){
+  // позиционирование джойстика по центру leftBase
+  const rect = leftBase.getBoundingClientRect();
+  leftCenter.x = rect.left + rect.width/2; leftCenter.y = rect.top + rect.height/2; leftMax = rect.width/2 * 0.7;
+
+  window.addEventListener('touchstart', (e)=>{
+    for(const t of e.changedTouches){
+      const x = t.clientX, y = t.clientY;
+      if(x < window.innerWidth * 0.55 && leftTouchId === null){
+        leftTouchId = t.identifier;
+        updateLeftStick(x,y);
+      } else if(x >= window.innerWidth * 0.55 && rightTouchId === null){
+        rightTouchId = t.identifier;
+        lastTouchX = x; lastTouchY = y;
+      } else if(x >= window.innerWidth * 0.55){
+        // быстрый тап справа -> стрельба
+        shoot();
+      }
+    }
+  }, {passive:false});
+
+  window.addEventListener('touchmove', (e)=>{
+    for(const t of e.changedTouches){
+      if(t.identifier === leftTouchId){
+        updateLeftStick(t.clientX, t.clientY);
+      } else if(t.identifier === rightTouchId){
+        const dx = t.clientX - lastTouchX; const dy = t.clientY - lastTouchY;
+        // вращение камеры: yaw + pitch
+        controls.getObject().rotation.y -= dx * 0.0026;
+        camera.rotation.x = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, camera.rotation.x - dy * 0.0026));
+        lastTouchX = t.clientX; lastTouchY = t.clientY;
+      }
+    }
+  }, {passive:false});
+
+  window.addEventListener('touchend', (e)=>{
+    for(const t of e.changedTouches){
+      if(t.identifier === leftTouchId){ leftTouchId = null; leftStick.style.transform = 'translate(0px,0px)'; move.x = 0; move.z = 0; }
+      if(t.identifier === rightTouchId){ rightTouchId = null; }
+    }
+  }, {passive:false});
+
+  // кнопки
+  fireBtn.addEventListener('touchstart', (e)=>{ e.preventDefault(); shoot(); }, {passive:false});
+  fireBtn.addEventListener('mousedown', ()=>{ if(!MOBILE) shoot(); });
+  reloadBtn.addEventListener('click', (e)=>{ e.preventDefault(); reload(); });
+}
+
+function updateLeftStick(x,y){
+  const dx = x - leftCenter.x; const dy = y - leftCenter.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  const max = leftMax;
+  const clamped = dist > max ? (max/dist) : 1;
+  const sx = dx * clamped; const sy = dy * clamped;
+  leftStick.style.transform = `translate(${sx}px,${sy}px)`;
+  // mapping: up (negative y) -> forward
+  const forward = -sy / max; const right = sx / max;
+  move.z = Math.abs(forward) < 0.06 ? 0 : forward;
+  move.x = Math.abs(right) < 0.06 ? 0 : right;
+}
+
+// === Коллизии игрока с окружением ===
+function playerCollision(){
+  const p = controls.getObject().position;
+  objects.forEach(o=>{
+    const minDist = 2.3;
+    const d = p.distanceTo(o.position);
+    if(d < minDist){
+      const push = new THREE.Vector3().subVectors(p, o.position).normalize().multiplyScalar(0.5);
+      controls.getObject().position.add(push);
+    }
+  });
+}
+
+// === Основной цикл ===
+let lastTime = performance.now(), frames=0, fpsTime=0;
+function animate(){
+  const now = performance.now();
+  const dt = Math.min(0.05, (now - lastTime) / 1000);
+  lastTime = now;
+  requestAnimationFrame(animate);
+
+  // движение игрока
+  const speed = 6.0;
+  const forward = new THREE.Vector3(0,0,-1).applyQuaternion(controls.getObject().quaternion); forward.y=0; forward.normalize();
+  const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0,1,0), forward).normalize();
+  const mv = new THREE.Vector3();
+  mv.addScaledVector(forward, move.z);
+  mv.addScaledVector(right, move.x);
+  if(mv.length()>0) mv.normalize();
+  controls.getObject().position.addScaledVector(mv, speed * dt);
+  playerCollision();
+
+  updateEnemies(dt);
+  updateBullets(dt);
+
+  renderer.render(scene, camera);
+
+  // FPS
+  frames++; fpsTime += dt;
+  if(fpsTime >= 0.6){ fpsEl.textContent = Math.round(frames / fpsTime); frames=0; fpsTime=0; }
+
+  // update UI
+  hpEl.textContent = hp; ammoEl.textContent = ammo; killsEl.textContent = kills;
+}
+
+// === Resize ===
+function onResize(){ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); }
+
+// === Рестарт уровня ===
+function restart(){ enemies.forEach(e=>scene.remove(e)); enemies=[]; for(let i=0;i<6;i++) spawnEnemy(); hp=100; ammo=30; kills=0; hpEl.textContent=hp; ammoEl.textContent=ammo; killsEl.textContent=kills; flash('Новый раунд'); }
+
+// === Старт игры ===
+startBtn.onclick = ()=>{
+  startScreen.style.display='none';
+  if(!scene) init();
+  if(!MOBILE){ try{ renderer.domElement.requestPointerLock(); }catch(e){ log('pointerlock fail', e); } }
+  animate();
+};
+
+// раскрытие логов по F12 или debugBtn
+window.addEventListener('error', (ev)=>{ log('Error:', ev.message); });
+
+// подсказка при проблеме соединения (часто на телефоне открывают через file://)
+if(location.protocol === 'file:'){ flash('Откройте страницу по HTTP (не file://). Используйте python -m http.server'); }
+
+// === Начальные значения ===
+hpEl.textContent = hp; ammoEl.textContent = ammo; killsEl.textContent = kills;
+</script>
+</body>
+</html>
